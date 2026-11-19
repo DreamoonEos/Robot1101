@@ -33,6 +33,18 @@ SETTLE_TICKS = 40
 PREPARE_TIMEOUT_SECONDS = 30.0
 HOME_DEGREES = 0.0
 
+# Degrees in joint order: base, shoulder, elbow, wrist, gripper.
+# K plays these with the same speed, acceleration, and Space stop as waypoint playback.
+KEY_WAYPOINTS = (
+    (-1.41, -4.92, 8.35, -92.55, 27.86),
+    (-1.49, -48.78, -17.67, -47.72, 6.50),
+    (-2.72, -38.06, 7.29, -63.63, 6.50),
+    (-2.64, -75.23, 41.92, -61.79, 6.50),
+    (-2.64, -75.23, 41.92, -61.79, 22.41),
+    (-2.11, 9.05, -17.67, -70.40, 22.41),
+    (-1.41, -4.92, 8.35, -92.55, 27.86),
+)
+
 # First key increases the calibrated angle, second key decreases it.
 JOINT_KEYS = {
     "base_yaw": ("q", "a"),
@@ -110,6 +122,50 @@ def command_angles(packet_handler, angles):
     command_positions(packet_handler, angles_to_positions(angles))
 
 
+def waypoint_positions():
+    """Convert the K sequence from degrees into raw servo goals."""
+    positions = []
+    for point in KEY_WAYPOINTS:
+        positions.append(
+            {
+                name: angle_to_position(name, angle)
+                for name, angle in zip(settings.JOINT_NAMES, point)
+            }
+        )
+    return positions
+
+
+def play_key_waypoints(packet_handler, terminal, angles):
+    """Play the K sequence the same way a saved waypoint file is played."""
+    points = waypoint_positions()
+    servo_ids = [settings.SERVO_IDS[name] for name in settings.JOINT_NAMES]
+    print("\r\nPlaying K waypoint sequence. Press Space for E-stop.", flush=True)
+    for index, positions in enumerate(points, start=1):
+        if terminal.read_key(0) == " ":
+            print("\r\nEMERGENCY STOP: releasing torque on all servos.", flush=True)
+            disable_all_torque(packet_handler)
+            return False
+        move_all_sync(
+            packet_handler,
+            positions,
+            speed=settings.POSE_SEQUENCE_MOVE_SPEED,
+            acceleration=settings.POSE_SEQUENCE_MOVE_ACCELERATION,
+        )
+        print(
+            f"\rMoving to point {index}/{len(points)} (Space = E-stop)",
+            end="",
+            flush=True,
+        )
+        if not wait_for_servos_or_estop(packet_handler, servo_ids, terminal):
+            return False
+    print("\r\nWaypoint sequence finished.", flush=True)
+    for name, angle in zip(settings.JOINT_NAMES, KEY_WAYPOINTS[-1]):
+        angles[name] = angle
+    while terminal.read_key(0) is not None:
+        pass
+    return True
+
+
 def prepare_home(packet_handler, angles):
     """Turn torque on, then drive every joint to home the way waypoint playback does."""
     enable_all_torque(packet_handler)
@@ -157,6 +213,7 @@ def print_instructions():
             f"  {increase_key}/{decrease_key}  {name:12s} "
             f"+/-   limits {minimum:g} to {maximum:g} deg"
         )
+    print("  k      play the bound waypoint sequence")
     print("  space  emergency stop (torque off)")
     print("  x      quit (torque off)")
     print()
@@ -182,6 +239,12 @@ def run_keyboard(packet_handler, angles):
             if key == "x":
                 print("\r\nQuit.", flush=True)
                 return
+            if key == "k":
+                if not play_key_waypoints(packet_handler, terminal, angles):
+                    return
+                sys.stdout.write("\r" + format_angles(angles) + "\x1b[K")
+                sys.stdout.flush()
+                continue
             if not apply_key(angles, key, steps):
                 continue
             command_angles(packet_handler, angles)
