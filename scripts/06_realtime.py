@@ -26,7 +26,7 @@ from arm_helpers import (
 from terminal_keys import RawTerminal
 
 # One keypress (or one key-repeat) changes that joint's target by this many degrees.
-STEP_DEGREES = 1.0
+STEP_DEGREES = 3.0
 # Prepare finishes when every servo is within this many ticks of 0 degrees
 # (about 3.5 degrees). This is a completion check, not a control gain.
 SETTLE_TICKS = 40
