@@ -21,6 +21,7 @@ from arm_helpers import (
     move_all_sync,
     position_to_angle,
     read_all,
+    wait_for_servos_or_estop,
 )
 from terminal_keys import RawTerminal
 
@@ -110,34 +111,24 @@ def command_angles(packet_handler, angles):
 
 
 def prepare_home(packet_handler, angles):
-    """Enable torque without snapping to a stale goal, then drive to home."""
-    # Write the current pose as the goal before torque comes on, so enabling
-    # torque holds the arm where it already is. The next goal is home.
-    command_positions(packet_handler, read_all(packet_handler))
+    """Turn torque on, then drive every joint to home the way waypoint playback does."""
     enable_all_torque(packet_handler)
-    return wait_until_settled(packet_handler, angles)
-
-
-def wait_until_settled(packet_handler, angles):
-    """Block until every joint is near its commanded angle, or Space is pressed."""
     targets = angles_to_positions(angles)
+    servo_ids = [settings.SERVO_IDS[name] for name in settings.JOINT_NAMES]
     deadline = time.monotonic() + PREPARE_TIMEOUT_SECONDS
-    next_command = 0.0
     with RawTerminal() as terminal:
         while True:
-            key = terminal.read_key(0.05)
-            if key == " " or key == "\x03":
+            if terminal.read_key(0) in (" ", "\x03"):
                 print("\r\nEMERGENCY STOP: releasing torque on all servos.", flush=True)
                 disable_all_torque(packet_handler)
                 return False
-            now = time.monotonic()
-            if now >= next_command:
-                command_angles(packet_handler, angles)
-                next_command = now + 0.5
+            command_angles(packet_handler, angles)
+            if not wait_for_servos_or_estop(packet_handler, servo_ids, terminal):
+                return False
             positions = read_all(packet_handler)
             if near_targets(positions, targets):
                 return True
-            if now >= deadline:
+            if time.monotonic() >= deadline:
                 measured = {
                     name: position_to_angle(name, positions[name])
                     for name in settings.JOINT_NAMES
@@ -146,6 +137,7 @@ def wait_until_settled(packet_handler, angles):
                     "Prepare timed out before the arm reached 0 degrees. "
                     f"Measured: {format_angles(measured)}"
                 )
+            time.sleep(0.1)
 
 
 def print_instructions():
